@@ -30,8 +30,8 @@ FrameForge is a **desktop application** that transforms sparse hand-drawn keyfra
 - [x] Repo created, directory structure established
 - [x] Python venv set up, PySide6 installed
 - [x] PySide6 skeleton app (first window)
-- [ ] Cloud API account (Replicate or RunPod)
-- [ ] First successful API call
+- [x] Cloud API account (Replicate or RunPod)
+- [x] First successful API call
 
 Phase 1 (MVP single-frame render) has not started.
 
