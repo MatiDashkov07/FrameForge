@@ -22,6 +22,10 @@ FrameForge is a **desktop application** that transforms sparse hand-drawn keyfra
 
 ---
 
+> Session logs: see docs/sessions/
+
+---
+
 ## Current Status
 
 **Phase: 0 — Foundation**
@@ -33,7 +37,43 @@ FrameForge is a **desktop application** that transforms sparse hand-drawn keyfra
 - [x] Cloud API account (Replicate or RunPod)
 - [x] First successful API call
 
-Phase 1 (MVP single-frame render) has not started.
+Phase 1 — MVP Core (Single-Frame Render) (NEXT)
+Goal: Connect the UI to the pipeline. User uploads a sketch → clicks Render → sees the result within the app.
+
+    Step 1 — File Upload (Sketch)
+    [x] Convert the "Sketch Input" sidebar section into a functional drag-and-drop zone.
+    [x] Support PNG/JPEG and display a thumbnail of the selected file.
+    [x] Save the file path in the application state.
+
+    Step 2 — Render Button + Pipeline Connection
+    [x] Add a "Render" button at the bottom of the sidebar.
+    [x] Clicking the button triggers the pipeline using code from tests/test_api.py.
+    [x] Move the API logic to src/frameforge/pipeline/replicate_client.py.
+    [x] Implementation must be async to prevent the UI from freezing.
+
+    Step 3 — Loading State
+    [x] During rendering: Disable the "Render" button.
+    [x] Status bar displays: "Rendering… (this may take 20–40s)".
+    [X] Show a spinner or progress indicator in the canvas.
+
+    Step 4 — Result Display
+    [x] When the image is returned: Display it in the main canvas.
+    [X] Before/After toggle: Switch between the original sketch and the result.
+    [x] Reset status bar to "Ready".
+
+    Step 5 — Export
+    [x] Add an "Export PNG" button to save the result to disk.
+    [x] Open a file save dialog with a default filename.
+
+    Step 6 — Basic Settings Panel
+    [x] Add a prompt text box to the sidebar (replacing the placeholder).
+    [x] IP-Adapter Strength slider (0.0–1.0).
+    [x] ControlNet Strength slider (0.0–1.0).
+
+Definition of Done — Phase 1:
+A user can open the app, drag in a sketch, type a prompt, click Render, view the processed image within the app, and export it.
+
+
 
 ---
 
@@ -175,5 +215,6 @@ Optional text prompt    ──► CLIP       ──┘
 - **Model evolution:** SD/Flux ecosystem moves fast. Design the pipeline to be model-agnostic where possible.
 
 ---
+
 
 *Last updated: April 2026 — Phase 0*

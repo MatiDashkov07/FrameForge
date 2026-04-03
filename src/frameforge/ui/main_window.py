@@ -1,24 +1,49 @@
 """
 main_window.py — FrameForge main application window.
 
-Phase 0: skeleton layout only. No real functionality yet.
-This file owns the top-level window, menu bar, splitter layout, and status bar.
+Phase 1, Step 6: Prompt QTextEdit and strength sliders replace placeholders.
 """
+
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QSplitter,
-    QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QFrame,
-    QStatusBar,
-    QMenuBar,
+    QMainWindow,
     QMenu,
+    QMenuBar,
+    QPushButton,
     QSizePolicy,
+    QSlider,
+    QSplitter,
+    QStackedWidget,
+    QStatusBar,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QImage, QPixmap
+
+from frameforge.ui.sketch_drop_zone import SketchDropZone
+from frameforge.ui.render_worker import RenderWorker
+
+# Canvas page indices — used with self._canvas_stack.setCurrentIndex()
+_PAGE_PLACEHOLDER = 0
+_PAGE_LOADING = 1
+_PAGE_RESULT = 2
+
+# Stylesheet fragments for the Sketch/Render toggle buttons
+_TOGGLE_ACTIVE_STYLE = (
+    "QPushButton { background-color: #3a3a3a; border: 1px solid #4a9eff;"
+    " border-radius: 3px; padding: 4px 12px; color: #ffffff; }"
+)
+_TOGGLE_INACTIVE_STYLE = (
+    "QPushButton { background-color: transparent; border: 1px solid #555555;"
+    " border-radius: 3px; padding: 4px 12px; color: #aaaaaa; }"
+)
 
 
 class MainWindow(QMainWindow):
@@ -33,6 +58,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self.WINDOW_TITLE)
         self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
 
+        # ── Application state ──────────────────────────────────────────
+        # MainWindow is the single source of truth for loaded data.
+        # Widgets report here via signals; they don't talk to each other.
+        self.sketch_path: Path | None = None        # set by _on_sketch_loaded
+        self._last_render: QImage | None = None     # set by _on_result_ready
+        self._render_worker: RenderWorker | None = None  # alive during render
+
         self._build_menu_bar()
         self._build_central_widget()
         self._build_status_bar()
@@ -42,13 +74,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _build_menu_bar(self) -> None:
-        """
-        Top menu bar with File and Help menus.
-        Phase 1+: File → Open Sketch, Save Project, Export Frame, etc.
-        """
         menu_bar: QMenuBar = self.menuBar()
 
-        # File menu — will hold open/save/export actions in Phase 1
         file_menu: QMenu = menu_bar.addMenu("&File")
         file_menu.addAction(QAction("Open Sketch…", self))
         file_menu.addAction(QAction("Open Reference Sheet…", self))
@@ -57,53 +84,32 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(QAction("Exit", self))
 
-        # Help menu — will link to docs/changelog in a later phase
         help_menu: QMenu = menu_bar.addMenu("&Help")
         help_menu.addAction(QAction("About FrameForge", self))
         help_menu.addAction(QAction("Documentation", self))
 
     # ------------------------------------------------------------------ #
-    # Central widget: sidebar + canvas                                     #
+    # Central widget                                                        #
     # ------------------------------------------------------------------ #
 
     def _build_central_widget(self) -> None:
-        """
-        Main layout: horizontal QSplitter with a left sidebar and a central
-        canvas area.
-
-        Sidebar (fixed ~280 px at start) holds three collapsible sections:
-          • Sketch Input   — Phase 1: drag-and-drop sketch upload
-          • References     — Phase 1: reference sheet thumbnails
-          • Prompt         — Phase 1: text prompt for CLIP conditioning
-
-        Canvas (fills remaining space):
-          • Phase 1: displays the rendered frame returned by the AI pipeline
-          • Phase 3: replaced by the full timeline + scrubber widget
-        """
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(4)
 
-        # Left sidebar
-        sidebar = self._build_sidebar()
-        splitter.addWidget(sidebar)
+        splitter.addWidget(self._build_sidebar())
+        splitter.addWidget(self._build_canvas())
 
-        # Central canvas
-        canvas = self._build_canvas()
-        splitter.addWidget(canvas)
-
-        # Give sidebar ~280 px and let the canvas take the rest
         splitter.setSizes([280, self.DEFAULT_WIDTH - 280])
-        splitter.setStretchFactor(0, 0)  # sidebar: don't stretch
-        splitter.setStretchFactor(1, 1)  # canvas: stretches with window
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
         self.setCentralWidget(splitter)
 
+    # ------------------------------------------------------------------ #
+    # Sidebar                                                              #
+    # ------------------------------------------------------------------ #
+
     def _build_sidebar(self) -> QWidget:
-        """
-        Left panel containing the three input sections.
-        Each section is a placeholder frame that will be replaced with a
-        dedicated widget in Phase 1.
-        """
         sidebar = QWidget()
         sidebar.setMinimumWidth(200)
         sidebar.setMaximumWidth(400)
@@ -112,81 +118,352 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(12)
 
-        # -- Sketch Input section --
-        # Phase 1: replaced by a drag-and-drop zone that accepts PNG/JPEG/PSD.
-        # The uploaded sketch is fed into ControlNet as the structure signal.
-        layout.addWidget(self._section_frame(
-            title="Sketch Input",
-            body="Drop a line-art sketch here.\n(PNG / JPEG / PSD)",
-        ))
+        # ── Sketch Input ───────────────────────────────────────────────
+        layout.addWidget(QLabel("<b>Sketch Input</b>"))
+        self._sketch_zone = SketchDropZone()
+        self._sketch_zone.sketch_loaded.connect(self._on_sketch_loaded)
+        layout.addWidget(self._sketch_zone)
 
-        # -- References section --
-        # Phase 1: replaced by a thumbnail grid for reference sheets.
-        # Images are encoded by IP-Adapter to extract palette, style, identity.
-        layout.addWidget(self._section_frame(
-            title="References",
-            body="Drop character / style reference\nimages here.",
-        ))
+        # ── Strength sliders ───────────────────────────────────────────
+        # IP-Adapter controls how strongly the style/identity conditioning
+        # from reference images is applied (0.0 = ignore, 1.0 = full).
+        # ControlNet controls how tightly the output follows the sketch
+        # structure (0.0 = loose, 1.0 = strict).
+        # Values are stored as integers 0–100 and divided by 100 on read.
+        layout.addWidget(self._build_sliders_section())
 
-        # -- Prompt section --
-        # Phase 1: replaced by a QTextEdit + token counter.
-        # Text is encoded by CLIP and passed as the third conditioning signal.
-        layout.addWidget(self._section_frame(
-            title="Prompt",
-            body="Describe the scene, lighting,\nor style here.",
-        ))
+        # ── Prompt ────────────────────────────────────────────────────
+        # Plain-text prompt encoded by CLIP as the third conditioning signal
+        # alongside ControlNet (structure) and IP-Adapter (style/identity).
+        layout.addWidget(QLabel("<b>Prompt</b>"))
+        self._prompt_edit = QTextEdit()
+        self._prompt_edit.setAcceptRichText(False)
+        self._prompt_edit.setFixedHeight(80)
+        self._prompt_edit.setPlaceholderText(
+            "2d illustration, detailed, high quality, clean lineart"
+        )
+        layout.addWidget(self._prompt_edit)
 
-        # Push all sections to the top
         layout.addStretch()
+
+        # ── Render button ──────────────────────────────────────────────
+        # Disabled until a sketch is loaded. Disabled again during render.
+        self._render_btn = QPushButton("Render")
+        self._render_btn.setEnabled(False)
+        self._render_btn.setMinimumHeight(36)
+        self._render_btn.clicked.connect(self._on_render_clicked)
+        layout.addWidget(self._render_btn)
+
+        # ── Export PNG button ──────────────────────────────────────────
+        # Disabled until a render result exists (enabled in _on_result_ready).
+        self._export_btn = QPushButton("Export PNG")
+        self._export_btn.setEnabled(False)
+        self._export_btn.setMinimumHeight(36)
+        self._export_btn.clicked.connect(self._on_export_clicked)
+        layout.addWidget(self._export_btn)
 
         return sidebar
 
+    # ------------------------------------------------------------------ #
+    # Canvas — QStackedWidget with three pages                            #
+    # ------------------------------------------------------------------ #
+
     def _build_canvas(self) -> QWidget:
         """
-        Central area that will display the rendered output frame.
-        Phase 1: replaced by a before/after comparison widget (QStackedWidget).
-        Phase 3: replaced by the full timeline + scrubber.
-        """
-        canvas = QWidget()
-        layout = QVBoxLayout(canvas)
-        layout.setContentsMargins(0, 0, 0, 0)
+        Factory for the central canvas area.
 
-        placeholder = QLabel("Your rendered frame will appear here")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        placeholder.setStyleSheet(
+        Page layout:
+          0 — PLACEHOLDER  Shown on launch and after a render error.
+          1 — LOADING       Shown while RenderWorker is running.
+          2 — RESULT        Shown when a render completes; has toggle buttons.
+
+        Phase 3: the entire stack will be replaced by the timeline widget.
+        """
+        self._canvas_stack = QStackedWidget()
+        self._canvas_stack.addWidget(self._build_placeholder_page())   # 0
+        self._canvas_stack.addWidget(self._build_loading_page())        # 1
+        self._canvas_stack.addWidget(self._build_result_page())         # 2
+        self._canvas_stack.setCurrentIndex(_PAGE_PLACEHOLDER)
+        return self._canvas_stack
+
+    def _build_placeholder_page(self) -> QWidget:
+        """Page 0: shown before any sketch is loaded, and after errors."""
+        label = QLabel("Your rendered frame will appear here")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        label.setStyleSheet(
             "color: #888888; font-size: 16px; background-color: #1e1e1e;"
         )
+        # Wrap in a plain widget so all pages have the same container type.
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(label)
+        return page
 
-        layout.addWidget(placeholder)
-        return canvas
+    def _build_loading_page(self) -> QWidget:
+        """
+        Page 1: shown while RenderWorker is running.
+        A simple text label is sufficient — no animated spinner needed yet.
+        Phase 2: replace with a QProgressBar once async polling is wired up.
+        """
+        label = QLabel("Rendering…  please wait")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        label.setStyleSheet(
+            "color: #cccccc; font-size: 18px; background-color: #1e1e1e;"
+        )
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(label)
+        return page
+
+    def _build_result_page(self) -> QWidget:
+        """
+        Page 2: shown after a successful render.
+
+        Layout:
+          ┌─ toggle bar ──────────────────────────────┐
+          │  [Sketch]  [Render]                        │
+          └───────────────────────────────────────────┘
+          ┌─ image display ───────────────────────────┐
+          │  (expands to fill remaining space)         │
+          └───────────────────────────────────────────┘
+
+        Both toggle buttons are disabled until _last_render is set.
+        """
+        page = QWidget()
+        page.setStyleSheet("background-color: #1e1e1e;")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # -- Toggle bar ------------------------------------------------
+        toggle_bar = QWidget()
+        toggle_bar.setFixedHeight(40)
+        toggle_bar.setStyleSheet("background-color: #252525;")
+        bar_layout = QHBoxLayout(toggle_bar)
+        bar_layout.setContentsMargins(8, 4, 8, 4)
+        bar_layout.setSpacing(6)
+
+        self._toggle_sketch_btn = QPushButton("Sketch")
+        self._toggle_sketch_btn.setEnabled(False)
+        self._toggle_sketch_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+        self._toggle_sketch_btn.clicked.connect(self._show_sketch)
+
+        self._toggle_render_btn = QPushButton("Render")
+        self._toggle_render_btn.setEnabled(False)
+        self._toggle_render_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+        self._toggle_render_btn.clicked.connect(self._show_render)
+
+        bar_layout.addWidget(self._toggle_sketch_btn)
+        bar_layout.addWidget(self._toggle_render_btn)
+        bar_layout.addStretch()
+        outer.addWidget(toggle_bar)
+
+        # -- Image display label ---------------------------------------
+        # Reused by both _show_sketch() and _show_render() — we just swap
+        # the pixmap to switch between the two views.
+        self._result_img_label = QLabel()
+        self._result_img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._result_img_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        outer.addWidget(self._result_img_label)
+
+        return page
 
     # ------------------------------------------------------------------ #
     # Status bar                                                           #
     # ------------------------------------------------------------------ #
 
     def _build_status_bar(self) -> None:
-        """
-        Bottom status bar.
-        Phase 1+: will show render progress, API status, and frame count.
-        """
         bar = QStatusBar()
         bar.showMessage("Ready")
         self.setStatusBar(bar)
 
     # ------------------------------------------------------------------ #
+    # Signal handlers — all state transitions live here                   #
+    # ------------------------------------------------------------------ #
+
+    def _on_sketch_loaded(self, path_str: str) -> None:
+        """SketchDropZone → MainWindow: a sketch file was accepted."""
+        self.sketch_path = Path(path_str)
+        self.statusBar().showMessage(f"Sketch loaded: {self.sketch_path.name}")
+        self._render_btn.setEnabled(True)
+        # Canvas stays on placeholder until the user explicitly renders.
+
+    def _on_render_clicked(self) -> None:
+        """User clicked Render: start a background worker, show loading page."""
+        if self.sketch_path is None:
+            return  # guard — button should be disabled, but be safe
+
+        self._render_btn.setEnabled(False)
+        self._canvas_stack.setCurrentIndex(_PAGE_LOADING)
+        self.statusBar().showMessage("Rendering…")
+
+        prompt = self._prompt_edit.toPlainText().strip()
+        if not prompt:
+            prompt = "2d illustration, detailed, high quality, clean lineart"
+
+        ip_strength = self._ip_strength_slider.value() / 100
+        cn_strength = self._cn_strength_slider.value() / 100
+
+        self._render_worker = RenderWorker(
+            self.sketch_path,
+            prompt,
+            ip_adapter_strength=ip_strength,
+            controlnet_strength=cn_strength,
+        )
+        self._render_worker.result_ready.connect(self._on_result_ready)
+        self._render_worker.error.connect(self._on_render_error)
+        self._render_worker.finished.connect(self._on_worker_finished)
+        self._render_worker.start()
+
+    def _on_result_ready(self, image: QImage) -> None:
+        """RenderWorker succeeded: store result, switch to result page, show render."""
+        self._last_render = image
+
+        # Enable toggle buttons and export now that a result exists.
+        self._toggle_sketch_btn.setEnabled(True)
+        self._toggle_render_btn.setEnabled(True)
+        self._export_btn.setEnabled(True)
+
+        # Default view after a render: show the AI result.
+        self._show_render()
+        self._canvas_stack.setCurrentIndex(_PAGE_RESULT)
+        self.statusBar().showMessage("Render complete.")
+
+    def _on_render_error(self, message: str) -> None:
+        """RenderWorker failed: return to placeholder, surface error."""
+        self._canvas_stack.setCurrentIndex(_PAGE_PLACEHOLDER)
+        self.statusBar().showMessage(f"Render failed: {message}")
+
+    def _on_worker_finished(self) -> None:
+        """QThread finished (fired after result_ready or error): clean up."""
+        self._render_btn.setEnabled(True)
+        self._render_worker = None  # allow GC
+
+    # ------------------------------------------------------------------ #
+    # Export handler                                                       #
+    # ------------------------------------------------------------------ #
+
+    def _on_export_clicked(self) -> None:
+        """Save self._last_render as a PNG chosen by the user."""
+        if self._last_render is None:
+            return  # guard — button should be disabled, but be safe
+
+        from PySide6.QtWidgets import QFileDialog  # local import: only needed here
+
+        default_name = datetime.now().strftime("frameforge_%Y%m%d_%H%M%S.png")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Rendered Frame",
+            default_name,
+            "PNG Image (*.png)",
+        )
+        if not path:
+            return  # user cancelled
+
+        if self._last_render.save(path):
+            self.statusBar().showMessage(f"Exported: {Path(path).name}")
+        else:
+            self.statusBar().showMessage("Export failed.")
+
+    # ------------------------------------------------------------------ #
+    # Toggle handlers (Page 2 only)                                       #
+    # ------------------------------------------------------------------ #
+
+    def _show_sketch(self) -> None:
+        """Load and display the original sketch in the result image label."""
+        if self.sketch_path is None:
+            return
+        pixmap = QPixmap(str(self.sketch_path))
+        self._display_pixmap(pixmap)
+        self._set_toggle_active(sketch=True)
+
+    def _show_render(self) -> None:
+        """Display the last render result in the result image label."""
+        if self._last_render is None:
+            return
+        pixmap = QPixmap.fromImage(self._last_render)
+        self._display_pixmap(pixmap)
+        self._set_toggle_active(sketch=False)
+
+    def _display_pixmap(self, pixmap: QPixmap) -> None:
+        """Scale pixmap to fit the image label, preserving aspect ratio."""
+        scaled = pixmap.scaled(
+            self._result_img_label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._result_img_label.setPixmap(scaled)
+
+    def _set_toggle_active(self, *, sketch: bool) -> None:
+        """Apply active/inactive styles to the two toggle buttons."""
+        if sketch:
+            self._toggle_sketch_btn.setStyleSheet(_TOGGLE_ACTIVE_STYLE)
+            self._toggle_render_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+        else:
+            self._toggle_sketch_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+            self._toggle_render_btn.setStyleSheet(_TOGGLE_ACTIVE_STYLE)
+
+    # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
 
+    def _build_sliders_section(self) -> QWidget:
+        """
+        Builds the strength sliders section for the sidebar.
+
+        Returns a QWidget containing:
+          • IP-Adapter Strength slider (default 0.75)
+          • ControlNet Strength slider (default 1.00)
+
+        Each slider row: header label + value label on one line, slider below.
+        Slider range is 0–100 (integer); display and pipeline use value / 100.
+        """
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        def _make_slider(
+            label_text: str,
+            default: int,
+        ) -> tuple[QSlider, QLabel]:
+            # Header row: name on the left, live value on the right
+            header = QWidget()
+            header_layout = QHBoxLayout(header)
+            header_layout.setContentsMargins(0, 0, 0, 0)
+            name_lbl = QLabel(label_text)
+            name_lbl.setStyleSheet("font-size: 11px;")
+            val_lbl = QLabel(f"{default / 100:.2f}")
+            val_lbl.setStyleSheet("font-size: 11px; color: #aaaaaa;")
+            header_layout.addWidget(name_lbl)
+            header_layout.addStretch()
+            header_layout.addWidget(val_lbl)
+
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 100)
+            slider.setValue(default)
+            slider.valueChanged.connect(
+                lambda v, lbl=val_lbl: lbl.setText(f"{v / 100:.2f}")
+            )
+
+            layout.addWidget(header)
+            layout.addWidget(slider)
+            return slider, val_lbl
+
+        self._ip_strength_slider, _ = _make_slider("IP-Adapter Strength", 75)
+        self._cn_strength_slider, _ = _make_slider("ControlNet Strength", 100)
+
+        return container
+
     @staticmethod
     def _section_frame(title: str, body: str) -> QFrame:
-        """
-        Returns a titled placeholder section for the sidebar.
-        Each frame will be replaced by a proper widget in Phase 1.
-        """
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
 
