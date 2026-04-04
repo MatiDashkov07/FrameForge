@@ -75,6 +75,33 @@ A user can open the app, drag in a sketch, type a prompt, click Render, view the
 
 
 
+Phase 2 — Plan
+Phase 2 in CLAUDE.md is defined as "Batch & Consistency" which is too broad. Breaking it down into realistic steps:
+Step 1 — References Upload
+
+- [] Convert the References sidebar section into a real drop zone, identical in structure to -   SketchDropZone
+- [] Support multiple images (1–3 reference sheets)
+- [] Pass reference images to IP-Adapter as real style/identity input, replacing the current behavior where the sketch itself acts as its own reference
+This is the single change that will make render results actually useful
+
+Step 2 — Model Swap
+
+- [] Move from Realistic Vision to an animation-focused model
+- [] RunPod + ComfyUI with lineart_anime ControlNet + Animagine or AnythingXL
+Requires rewriting replicate_client.py but the architecture stays identical
+One constant swap = different backend
+
+Step 3 — Multi-frame Import
+
+- [] Upload multiple sketches in a single session
+- [] Introduce the tab system discussed at end of Phase 1 — each sketch gets its own tab, render results open as a new tab alongside the source sketch
+
+Deferred to Phase 3
+
+Batch rendering
+Temporal consistency (seed locking, latent anchoring)
+These require a stable and proven single-frame flow first
+
 ---
 
 ## Repository Structure

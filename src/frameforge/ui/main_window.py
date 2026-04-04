@@ -28,12 +28,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction, QImage, QPixmap
 
 from frameforge.ui.sketch_drop_zone import SketchDropZone
+from frameforge.ui.reference_drop_zone import ReferenceDropZone
 from frameforge.ui.render_worker import RenderWorker
 
 # Canvas page indices — used with self._canvas_stack.setCurrentIndex()
 _PAGE_PLACEHOLDER = 0
 _PAGE_LOADING = 1
 _PAGE_RESULT = 2
+_PAGE_REFERENCES = 3  # full-canvas reference management view (Phase 2)
 
 # Stylesheet fragments for the Sketch/Render toggle buttons
 _TOGGLE_ACTIVE_STYLE = (
@@ -62,6 +64,7 @@ class MainWindow(QMainWindow):
         # MainWindow is the single source of truth for loaded data.
         # Widgets report here via signals; they don't talk to each other.
         self.sketch_path: Path | None = None        # set by _on_sketch_loaded
+        self.reference_paths: list[str] = []        # set by _on_references_changed
         self._last_render: QImage | None = None     # set by _on_result_ready
         self._render_worker: RenderWorker | None = None  # alive during render
 
@@ -117,6 +120,12 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(12)
+
+        # ── Canvas-mode tab buttons ────────────────────────────────────
+        # These switch what is shown in the main canvas area.
+        # [Sketch Input] → shows the sketch/render stack (pages 0–2).
+        # [References]   → shows the full-canvas ReferenceDropZone (page 3).
+        layout.addWidget(self._build_sidebar_tabs())
 
         # ── Sketch Input ───────────────────────────────────────────────
         layout.addWidget(QLabel("<b>Sketch Input</b>"))
@@ -183,6 +192,7 @@ class MainWindow(QMainWindow):
         self._canvas_stack.addWidget(self._build_placeholder_page())   # 0
         self._canvas_stack.addWidget(self._build_loading_page())        # 1
         self._canvas_stack.addWidget(self._build_result_page())         # 2
+        self._canvas_stack.addWidget(self._build_references_page())     # 3
         self._canvas_stack.setCurrentIndex(_PAGE_PLACEHOLDER)
         return self._canvas_stack
 
@@ -275,6 +285,25 @@ class MainWindow(QMainWindow):
 
         return page
 
+    def _build_references_page(self) -> QWidget:
+        """
+        Page 3: full-canvas reference image management.
+
+        The ReferenceDropZone fills the entire canvas so the user has
+        a large drop target and can clearly see all loaded thumbnails.
+        Activated by the [References] sidebar tab button.
+        """
+        page = QWidget()
+        page.setStyleSheet("background-color: #1e1e1e;")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        self._reference_zone = ReferenceDropZone()
+        self._reference_zone.references_changed.connect(self._on_references_changed)
+        layout.addWidget(self._reference_zone)
+
+        return page
+
     # ------------------------------------------------------------------ #
     # Status bar                                                           #
     # ------------------------------------------------------------------ #
@@ -295,10 +324,25 @@ class MainWindow(QMainWindow):
         self._render_btn.setEnabled(True)
         # Canvas stays on placeholder until the user explicitly renders.
 
+    def _on_references_changed(self, paths: list[str]) -> None:
+        """ReferenceDropZone → MainWindow: the loaded reference set changed."""
+        self.reference_paths = paths
+        count = len(paths)
+        if count:
+            self.statusBar().showMessage(
+                f"{count} reference image{'s' if count != 1 else ''} loaded."
+            )
+        else:
+            self.statusBar().showMessage("References cleared.")
+
     def _on_render_clicked(self) -> None:
         """User clicked Render: start a background worker, show loading page."""
         if self.sketch_path is None:
             return  # guard — button should be disabled, but be safe
+
+        # If the user was viewing references, switch back to the sketch canvas
+        # so they can watch the loading state and result.
+        self._activate_sketch_tab()
 
         self._render_btn.setEnabled(False)
         self._canvas_stack.setCurrentIndex(_PAGE_LOADING)
@@ -316,6 +360,7 @@ class MainWindow(QMainWindow):
             prompt,
             ip_adapter_strength=ip_strength,
             controlnet_strength=cn_strength,
+            reference_paths=self.reference_paths,
         )
         self._render_worker.result_ready.connect(self._on_result_ready)
         self._render_worker.error.connect(self._on_render_error)
@@ -413,6 +458,52 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
+
+    def _build_sidebar_tabs(self) -> QWidget:
+        """
+        Two tab buttons that control which canvas page is visible.
+
+          [Sketch Input]  — canvas pages 0/1/2 (placeholder / loading / result)
+          [References]    — canvas page 3 (ReferenceDropZone full-canvas)
+
+        Styled identically to the Sketch/Render toggle buttons on the result page.
+        [Sketch Input] is active on launch.
+        """
+        bar = QWidget()
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(0, 0, 0, 0)
+        bar_layout.setSpacing(4)
+
+        self._tab_sketch_btn = QPushButton("Sketch Input")
+        self._tab_sketch_btn.setStyleSheet(_TOGGLE_ACTIVE_STYLE)
+        self._tab_sketch_btn.clicked.connect(self._activate_sketch_tab)
+
+        self._tab_refs_btn = QPushButton("References")
+        self._tab_refs_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+        self._tab_refs_btn.clicked.connect(self._activate_references_tab)
+
+        bar_layout.addWidget(self._tab_sketch_btn)
+        bar_layout.addWidget(self._tab_refs_btn)
+        bar_layout.addStretch()
+        return bar
+
+    def _activate_sketch_tab(self) -> None:
+        """Switch canvas to the sketch/render stack; mark [Sketch Input] active."""
+        self._tab_sketch_btn.setStyleSheet(_TOGGLE_ACTIVE_STYLE)
+        self._tab_refs_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+        # Restore whichever sketch page is contextually correct.
+        if self._render_worker is not None:
+            self._canvas_stack.setCurrentIndex(_PAGE_LOADING)
+        elif self._last_render is not None:
+            self._canvas_stack.setCurrentIndex(_PAGE_RESULT)
+        else:
+            self._canvas_stack.setCurrentIndex(_PAGE_PLACEHOLDER)
+
+    def _activate_references_tab(self) -> None:
+        """Switch canvas to page 3 (ReferenceDropZone); mark [References] active."""
+        self._tab_refs_btn.setStyleSheet(_TOGGLE_ACTIVE_STYLE)
+        self._tab_sketch_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+        self._canvas_stack.setCurrentIndex(_PAGE_REFERENCES)
 
     def _build_sliders_section(self) -> QWidget:
         """

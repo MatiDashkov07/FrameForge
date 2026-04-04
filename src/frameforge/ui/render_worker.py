@@ -49,6 +49,7 @@ class RenderWorker(QThread):
         prompt: str,
         ip_adapter_strength: float = 1.0,
         controlnet_strength: float = 1.0,
+        reference_paths: list[str] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -56,6 +57,7 @@ class RenderWorker(QThread):
         self._prompt = prompt
         self._ip_adapter_strength = ip_adapter_strength
         self._controlnet_strength = controlnet_strength
+        self._reference_paths: list[str] = reference_paths or []
 
     def run(self) -> None:
         """
@@ -72,6 +74,7 @@ class RenderWorker(QThread):
                 self._prompt,
                 ip_adapter_strength=self._ip_adapter_strength,
                 controlnet_strength=self._controlnet_strength,
+                reference_paths=self._reference_paths,
             )
 
             # -- Step 2: download the rendered image ---------------------------

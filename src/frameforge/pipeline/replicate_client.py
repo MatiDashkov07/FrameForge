@@ -46,6 +46,7 @@ def render_frame(
     prompt: str,
     ip_adapter_strength: float = 1.0,
     controlnet_strength: float = 1.0,
+    reference_paths: list[str] | None = None,
 ) -> str:
     """
     Submit a single-frame render request to Replicate.
@@ -65,6 +66,11 @@ def render_frame(
     controlnet_strength:
         How strictly the output must follow the sketch's structure.
         1.0 = tight adherence. Reduce for softer, more creative results.
+    reference_paths:
+        Optional list of absolute paths to reference images (PNG or JPEG).
+        The first path is passed to IP-Adapter as the style/identity source.
+        When None or empty, IP-Adapter runs without an image input (same
+        behaviour as Phase 1).
 
     Returns
     -------
@@ -81,18 +87,31 @@ def render_frame(
     """
     _ensure_token()
 
-    with open(sketch_path, "rb") as sketch_file:
-        output = replicate.run(
-            MODEL_VERSION,
-            input={
-                "prompt": prompt,
-                "scribble_image": sketch_file,
-                "ip_adapter_ckpt": _IP_ADAPTER_CKPT,
-                "sorted_controlnets": _SORTED_CONTROLNETS,
-                "ip_adapter_strength": ip_adapter_strength,
-                "controlnet_conditioning_scale": controlnet_strength,
-            },
-        )
+    ref_list = reference_paths or []
+    ref_file = open(ref_list[0], "rb") if ref_list else None  # noqa: SIM115
+
+    try:
+        payload: dict = {
+            "prompt": prompt,
+            "ip_adapter_ckpt": _IP_ADAPTER_CKPT,
+            "sorted_controlnets": _SORTED_CONTROLNETS,
+            "ip_adapter_strength": ip_adapter_strength,
+            "controlnet_conditioning_scale": controlnet_strength,
+        }
+        if ref_file is not None:
+            # IP-Adapter image: the model uses the first reference as the
+            # style/identity conditioning source, replacing the Phase 1
+            # behaviour where no image was passed to IP-Adapter at all.
+            # TODO Phase 3: support multiple references via embedding averaging.
+            # Currently only the first reference is passed to IP-Adapter.
+            payload["ip_adapter_image"] = ref_file
+
+        with open(sketch_path, "rb") as sketch_file:
+            payload["scribble_image"] = sketch_file
+            output = replicate.run(MODEL_VERSION, input=payload)
+    finally:
+        if ref_file is not None:
+            ref_file.close()
 
     # The model returns either a single URL string or a list of URLs.
     # Normalise to a single str regardless so callers don't need to branch.
