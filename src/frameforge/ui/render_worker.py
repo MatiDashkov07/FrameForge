@@ -1,15 +1,15 @@
 """
-render_worker.py — FrameForge Phase 1 background render thread.
+render_worker.py — FrameForge background render thread.
 
-Runs the blocking Replicate API call on a QThread so the UI stays
-responsive during inference (which can take 10–30 seconds).
+Runs the blocking ComfyUI API call on a QThread so the UI stays
+responsive during inference (which can take 30–90 seconds).
 
 Signal flow:
     MainWindow._on_render_clicked()
         → RenderWorker.start()
             → RenderWorker.run()          [background thread]
-                → render_frame()          [blocks until Replicate responds]
-                → downloads image bytes   [one more HTTP round-trip]
+                → render_frame()          [blocks until ComfyUI job completes]
+                → downloads image bytes   [one more HTTP round-trip to /view]
                 → emits result_ready(QImage)   [back to main thread via Qt queue]
              OR → emits error(str)              [on any exception]
         → MainWindow._on_result_ready()   [Qt delivers signal on main thread]
@@ -24,7 +24,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from frameforge.pipeline.replicate_client import render_frame
+from frameforge.pipeline.comfyui_client import render_frame
 
 
 class RenderWorker(QThread):
@@ -65,10 +65,9 @@ class RenderWorker(QThread):
         Must not touch Qt widgets directly — all UI updates go through signals.
         """
         try:
-            # -- Step 1: submit to Replicate, wait for the output URL ----------
-            # This call blocks for the duration of inference (typically 10–30 s).
-            # Phase 2: consider replicate.predictions.create() + polling so we
-            # can emit progress signals for a progress bar.
+            # -- Step 1: submit to ComfyUI, wait for the output URL -----------
+            # This call blocks for the duration of inference (typically 30–90 s).
+            # Includes upload, queue, polling, and URL construction internally.
             image_url = render_frame(
                 self._sketch_path,
                 self._prompt,
@@ -79,7 +78,7 @@ class RenderWorker(QThread):
 
             # -- Step 2: download the rendered image ---------------------------
             # urllib.request is stdlib — no extra dependency needed.
-            # The URL is a Replicate CDN link returned by the model.
+            # The URL points to the ComfyUI /view endpoint on the server.
             with urllib.request.urlopen(image_url) as response:
                 image_bytes: bytes = response.read()
 
@@ -89,7 +88,7 @@ class RenderWorker(QThread):
             image = QImage()
             if not image.loadFromData(image_bytes):
                 raise ValueError(
-                    f"Failed to decode image returned by Replicate. "
+                    f"Failed to decode image returned by ComfyUI. "
                     f"URL was: {image_url}"
                 )
 
