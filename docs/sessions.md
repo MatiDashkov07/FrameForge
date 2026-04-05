@@ -13,3 +13,12 @@ We started from a completed Phase 0 and built Phase 1 in full — from scratch t
 
 Session summary
 Phase 2 migration session: Built the complete ComfyUI workflow in the local ComfyUI GUI — Animagine XL base model + ControlNet Sketch + IP-Adapter Plus with CLIP Vision. Exported the workflow as API-format JSON (worflow_api_v1.json). Claude Code then created comfyui_client.py (same render_frame() interface as replicate_client.py), a smoke test file, and swapped the import in render_worker.py. Local GPU (GTX 1060) can't run SDXL, so no test run yet. Next step: RunPod account setup + cloud testing.
+
+
+Session summary
+Today we set up the entire RunPod infrastructure — account, Network Volume, SSH keys, GPU Pod with ComfyUI template. Downloaded all 4 models (Animagine, ControlNet Sketch, IP-Adapter Plus, CLIP Vision) and installed the IPAdapter custom node. Ran 3 successful renders directly from ComfyUI in the cloud, and discovered that a face-only reference image + removing color-descriptive words from the prompt significantly improves color accuracy. Pod terminated, models persist on the Network Volume. Next up: Spin up a new Pod, grab the ComfyUI proxy URL, and wire it into the FrameForge desktop app through comfyui_client.py.
+
+
+
+Session Summary
+Step 4 of Phase 2 migration completed: FrameForge desktop app now connects to ComfyUI on RunPod for cloud-based rendering. Two bugs were fixed along the way — Cloudflare's proxy blocks requests without a User-Agent header (affected all HTTP calls), and one urlopen call in _poll_until_done() was missed during the initial header fix. The full pipeline works end-to-end: sketch upload → ComfyUI inference on RunPod → rendered image displayed in app. Next focus shifts from infrastructure to output quality — the model produces decent results but struggles with color accuracy and character identity, pointing toward prompt engineering and workflow improvements as the next priority.

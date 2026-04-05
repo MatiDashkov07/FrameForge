@@ -124,7 +124,7 @@
   },
   "154": {
     "inputs": {
-      "strength": 0.8,
+      "strength": 1.0,
       "start_percent": 0,
       "end_percent": 1,
       "positive": [
@@ -178,7 +178,7 @@
   },
   "159": {
     "inputs": {
-      "weight": 0.7,
+      "weight": 1.0,
       "weight_type": "linear",
       "combine_embeds": "concat",
       "start_at": 0,

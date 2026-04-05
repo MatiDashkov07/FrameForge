@@ -30,7 +30,7 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-from frameforge.pipeline.comfyui_client import render_frame, _ensure_url  # noqa: E402
+from frameforge.pipeline.comfyui_client import render_frame, _ensure_url, _USER_AGENT  # noqa: E402
 
 _SKETCH_PATH    = _PROJECT_ROOT / "assets" / "test_sketch.png"
 _REFERENCE_PATH = _PROJECT_ROOT / "assets" / "test_reference.png"
@@ -47,7 +47,10 @@ def main() -> None:
     base_url = _ensure_url()
     print(f"      Target: {base_url}")
     try:
-        with urllib.request.urlopen(f"{base_url}/system_stats", timeout=5) as resp:
+        req = urllib.request.Request(
+            f"{base_url}/system_stats", headers={"User-Agent": _USER_AGENT}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
             stats = resp.read()
         print(f"      OK — server responded ({len(stats)} bytes)")
     except Exception as exc:
@@ -92,7 +95,10 @@ def main() -> None:
     # -- [4/4] Download and save result --------------------------------------
     print(f"\n[4/4] Downloading result to {_OUTPUT_PATH.name}…")
     try:
-        with urllib.request.urlopen(result_url) as resp:
+        dl_req = urllib.request.Request(
+            result_url, headers={"User-Agent": _USER_AGENT}
+        )
+        with urllib.request.urlopen(dl_req) as resp:
             image_bytes = resp.read()
         _OUTPUT_PATH.write_bytes(image_bytes)
         print(f"      Saved {len(image_bytes):,} bytes → {_OUTPUT_PATH}")

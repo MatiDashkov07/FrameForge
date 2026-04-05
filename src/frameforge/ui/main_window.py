@@ -346,7 +346,7 @@ class MainWindow(QMainWindow):
 
         self._render_btn.setEnabled(False)
         self._canvas_stack.setCurrentIndex(_PAGE_LOADING)
-        self.statusBar().showMessage("Rendering…")
+        self.statusBar().showMessage("Rendering…  (may take up to a minute on first render)")
 
         prompt = self._prompt_edit.toPlainText().strip()
         if not prompt:

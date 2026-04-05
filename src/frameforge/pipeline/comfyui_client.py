@@ -46,6 +46,31 @@ _CONTROLNET_NODE       = "154"  # ControlNetApplyAdvanced → inputs.strength
 _IP_ADAPTER_NODE       = "159"  # IPAdapterAdvanced      → inputs.weight
 _SAVE_IMAGE_NODE       = "151"  # SaveImage              → read for output filename
 
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
+
+# Sent on every request. Cloudflare (RunPod proxy) blocks requests that
+# omit a User-Agent header with a 403 Forbidden response.
+_USER_AGENT = "FrameForge/0.1"
+
+
+def _request(
+    url: str,
+    *,
+    data: bytes | None = None,
+    headers: dict | None = None,
+    method: str | None = None,
+) -> urllib.request.Request:
+    """
+    Build a urllib Request with User-Agent pre-set.
+    Extra headers (e.g. Content-Type) are merged on top.
+    """
+    h = {"User-Agent": _USER_AGENT}
+    if headers:
+        h.update(headers)
+    return urllib.request.Request(url, data=data, headers=h, method=method)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -99,22 +124,39 @@ def render_frame(
     """
     base_url = _ensure_url()
 
+    print(f"[DEBUG render_frame] sketch_path={sketch_path}")
+    print(f"[DEBUG render_frame] prompt={prompt!r}")
+    print(f"[DEBUG render_frame] ip_adapter_strength={ip_adapter_strength}, controlnet_strength={controlnet_strength}")
+    print(f"[DEBUG render_frame] reference_paths={reference_paths}")
+    print(f"[DEBUG render_frame] base_url={base_url}")
+
     ref_list = reference_paths or []
     ref_path = Path(ref_list[0]) if ref_list else sketch_path  # fallback = sketch
 
     # -- Step 1: upload images -----------------------------------------------
     sketch_fn = _upload_image(base_url, sketch_path)
+    print(f"[DEBUG render_frame] uploaded sketch → ComfyUI filename: {sketch_fn!r}")
     ref_fn    = _upload_image(base_url, ref_path)
+    print(f"[DEBUG render_frame] uploaded reference → ComfyUI filename: {ref_fn!r}")
 
     # -- Step 2: build populated workflow ------------------------------------
     workflow = _build_workflow(sketch_fn, ref_fn, prompt,
                                ip_adapter_strength, controlnet_strength)
+    print(f"[DEBUG render_frame] workflow node values:")
+    print(f"  node {_SKETCH_NODE}  (LoadImage/sketch)    image={workflow[_SKETCH_NODE]['inputs']['image']!r}")
+    print(f"  node {_REFERENCE_NODE}  (LoadImage/reference) image={workflow[_REFERENCE_NODE]['inputs']['image']!r}")
+    print(f"  node {_POSITIVE_PROMPT_NODE}  (CLIPTextEncode)      text={workflow[_POSITIVE_PROMPT_NODE]['inputs']['text']!r}")
+    print(f"  node {_CONTROLNET_NODE}  (ControlNet)          strength={workflow[_CONTROLNET_NODE]['inputs']['strength']}")
+    print(f"  node {_IP_ADAPTER_NODE}  (IPAdapter)           weight={workflow[_IP_ADAPTER_NODE]['inputs']['weight']}")
 
     # -- Step 3: queue the prompt --------------------------------------------
     prompt_id = _queue_prompt(base_url, workflow)
+    print(f"[DEBUG render_frame] queued prompt_id={prompt_id!r}")
 
     # -- Step 4: poll until done ---------------------------------------------
     job = _poll_until_done(base_url, prompt_id)
+    print(f"[DEBUG render_frame] job completed. full output dict:")
+    print(json.dumps(job, indent=2))
 
     # -- Step 5: extract output filename from SaveImage node -----------------
     try:
@@ -169,7 +211,7 @@ def _upload_image(base_url: str, image_path: Path) -> str:
         f"\r\n"
     ).encode() + file_bytes + f"\r\n--{boundary}--\r\n".encode()
 
-    req = urllib.request.Request(
+    req = _request(
         f"{base_url}/upload/image",
         data=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
@@ -213,7 +255,7 @@ def _queue_prompt(base_url: str, workflow: dict) -> str:
     Returns the prompt_id string assigned by ComfyUI.
     """
     body = json.dumps({"prompt": workflow}).encode("utf-8")
-    req = urllib.request.Request(
+    req = _request(
         f"{base_url}/prompt",
         data=body,
         headers={"Content-Type": "application/json"},
@@ -223,6 +265,8 @@ def _queue_prompt(base_url: str, workflow: dict) -> str:
         result = json.loads(resp.read())
 
     # ComfyUI returns: {"prompt_id": "...", "number": N, "node_errors": {}}
+    print(f"[DEBUG _queue_prompt] full /prompt response:")
+    print(json.dumps(result, indent=2))
     return result["prompt_id"]
 
 
@@ -230,7 +274,7 @@ def _poll_until_done(
     base_url: str,
     prompt_id: str,
     interval: float = 1.0,
-    timeout: float = 120.0,
+    timeout: float = 300.0,
 ) -> dict:
     """
     Poll GET /history/{prompt_id} until the job appears in the response.
@@ -241,14 +285,18 @@ def _poll_until_done(
 
     Returns the history entry dict for the completed job.
     Raises TimeoutError if the job does not complete within `timeout` seconds.
+
+    300 s budget accounts for RunPod cold-start: the RTX A4000 can spend up to
+    60 s loading models into VRAM on the first render of a session.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         with urllib.request.urlopen(
-            f"{base_url}/history/{prompt_id}"
+            _request(f"{base_url}/history/{prompt_id}")
         ) as resp:
             history = json.loads(resp.read())
 
+        print(f"[DEBUG _poll_until_done] poll response keys={list(history.keys()) or '(empty)'}")
         if prompt_id in history:
             return history[prompt_id]
 

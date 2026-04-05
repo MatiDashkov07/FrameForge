@@ -24,7 +24,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from frameforge.pipeline.comfyui_client import render_frame
+from frameforge.pipeline.comfyui_client import render_frame, _USER_AGENT
 
 
 class RenderWorker(QThread):
@@ -79,7 +79,13 @@ class RenderWorker(QThread):
             # -- Step 2: download the rendered image ---------------------------
             # urllib.request is stdlib — no extra dependency needed.
             # The URL points to the ComfyUI /view endpoint on the server.
-            with urllib.request.urlopen(image_url) as response:
+            # User-Agent header is required — RunPod's Cloudflare proxy
+            # returns 403 Forbidden on requests without it.
+            print(f"[DEBUG RenderWorker] image_url={image_url!r}")
+            dl_req = urllib.request.Request(
+                image_url, headers={"User-Agent": _USER_AGENT}
+            )
+            with urllib.request.urlopen(dl_req) as response:
                 image_bytes: bytes = response.read()
 
             # -- Step 3: decode bytes → QImage ---------------------------------
