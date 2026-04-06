@@ -84,3 +84,32 @@ Why: Scale to zero costs when no one is using the app, and scale to infinity dur
 Refined Approach to Regional Prompting (Phase 4, Step 6): Instead of relying on a Vision Language Model (VLM) to generate raw bounding box coordinates—which often leads to imprecise borders and color-bleeding artifacts—the VLM will be used strictly for semantic tagging (e.g., identifying "straw hat" or "red vest"). These tags will then be passed to a dedicated segmentation model like GroundingDINO within the ComfyUI pipeline to generate pixel-perfect, dynamic masks for accurate regional conditioning.
 
 Simplified Multi-Reference Averaging (Phase 4, Step 5): To avoid the heavy R&D overhead of building custom Python logic for latent space math, the multi-reference system will leverage the existing IP-Adapter Plus architecture natively within ComfyUI. This allows the system to accept a batch input of multiple reference images and automatically handles the weighted embedding averaging required for cohesive 360-degree character styling.
+
+
+
+Character & Location Library System — Final Design
+Core Principle: Reference images are the source of truth. Tags are derived, not authored. The animator works with visual assets, never with prompt engineering.
+Character Cards:
+Each character in a project is defined by a Character Card containing: reference images (up to 20, including full-body, face crops, outfit details, and expression variants), and a set of editable visual trait fields — identity tags (hair color, eye color, body type), outfit tags (clothing items, accessories), color tags (palette specifics), facial features, and allowed variants (e.g., "sometimes wears glasses," "has both casual and formal outfits"). When a character is first created, AI vision analysis examines the reference images and pre-populates these trait fields as suggestions. The animator reviews, edits, or overrides any field. The underlying Danbooru tag set is generated automatically from these structured fields — the animator never writes raw tags.
+Location Cards:
+Same structure applied to environments. A Location Card contains: reference images of the environment, and editable trait fields — environment tags (forest, city, interior), lighting palette (sunset, overcast, neon), mood (serene, tense, chaotic), and recurring visual motifs (cherry blossoms, rain, fog). AI vision pre-populates from the reference images; the animator refines.
+Per-frame override:
+A short natural-language scene direction field available at render time for frame-specific context that deviates from the character or location defaults. Examples: "she's crying in this frame," "dramatic side lighting," "covered in mud." This is converted into tags by the auto-tagger, with per-frame overrides taking highest priority in conflict resolution.
+Auto-tagger pipeline:
+At render time, the system merges four inputs into a unified Danbooru tag set: (1) the selected Character Card's trait fields, (2) the selected Location Card's trait fields, (3) the per-frame override prompt, and (4) AI vision analysis of the current sketch (extracting pose, composition, framing — e.g., full_body, sitting, from_side). Conflict resolution priority: per-frame override > vision analysis of sketch > character/location card traits.
+AI Vision Analysis (reusable function):
+A shared vision function that examines any image and produces structured visual trait suggestions. Used in three contexts: (1) during Character Card creation — analyzes reference images and suggests trait fields; (2) during Location Card creation — same process for environments; (3) during rendering — analyzes the current sketch to extract pose, composition, and scene-specific details not covered by the cards. In context (3), it also acts as a validation layer: compares the sketch against the synthesized tag set and flags missing or contradictory traits before the render is submitted.
+What the animator never does:
+
+Write Danbooru tags directly
+Re-describe a character on every frame
+Think about prompt syntax or token ordering
+Worry about model-specific prompt formatting
+
+What the animator does:
+
+Upload reference images
+Review and edit suggested visual traits in plain language
+Select a character and location from dropdowns
+Optionally write a short scene direction for the current frame
+Click Render.

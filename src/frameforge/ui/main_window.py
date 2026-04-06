@@ -141,15 +141,16 @@ class MainWindow(QMainWindow):
         # Values are stored as integers 0–100 and divided by 100 on read.
         layout.addWidget(self._build_sliders_section())
 
-        # ── Prompt ────────────────────────────────────────────────────
-        # Plain-text prompt encoded by CLIP as the third conditioning signal
-        # alongside ControlNet (structure) and IP-Adapter (style/identity).
-        layout.addWidget(QLabel("<b>Prompt</b>"))
+        # ── Scene direction ────────────────────────────────────────────
+        # Natural-language scene context passed to the auto-tagger as user_context.
+        # The auto-tagger converts this (plus the sketch) into Danbooru tags.
+        # Leave blank to let the auto-tagger decide everything from the sketch alone.
+        layout.addWidget(QLabel("<b>Scene Direction</b>"))
         self._prompt_edit = QTextEdit()
         self._prompt_edit.setAcceptRichText(False)
         self._prompt_edit.setFixedHeight(80)
         self._prompt_edit.setPlaceholderText(
-            "2d illustration, detailed, high quality, clean lineart"
+            "Scene direction (optional) — e.g. sunset, forest background"
         )
         layout.addWidget(self._prompt_edit)
 
@@ -346,22 +347,21 @@ class MainWindow(QMainWindow):
 
         self._render_btn.setEnabled(False)
         self._canvas_stack.setCurrentIndex(_PAGE_LOADING)
-        self.statusBar().showMessage("Rendering…  (may take up to a minute on first render)")
+        self.statusBar().showMessage("Analyzing sketch...")
 
-        prompt = self._prompt_edit.toPlainText().strip()
-        if not prompt:
-            prompt = "2d illustration, detailed, high quality, clean lineart"
+        scene_direction = self._prompt_edit.toPlainText().strip()
 
         ip_strength = self._ip_strength_slider.value() / 100
         cn_strength = self._cn_strength_slider.value() / 100
 
         self._render_worker = RenderWorker(
             self.sketch_path,
-            prompt,
+            scene_direction,
             ip_adapter_strength=ip_strength,
             controlnet_strength=cn_strength,
             reference_paths=self.reference_paths,
         )
+        self._render_worker.status.connect(self.statusBar().showMessage)
         self._render_worker.result_ready.connect(self._on_result_ready)
         self._render_worker.error.connect(self._on_render_error)
         self._render_worker.finished.connect(self._on_worker_finished)

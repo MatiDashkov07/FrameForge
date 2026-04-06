@@ -18,12 +18,14 @@ No pipeline logic lives here. This class only orchestrates the call and
 converts the raw bytes into a QImage that the UI can display directly.
 """
 
+import time
 import urllib.request
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+from frameforge.pipeline.auto_tagger import analyze_image, generate_tags
 from frameforge.pipeline.comfyui_client import render_frame, _USER_AGENT
 
 
@@ -42,6 +44,9 @@ class RenderWorker(QThread):
 
     # Emitted on failure: delivers a human-readable error message.
     error = Signal(str)
+
+    # Emitted at each pipeline stage so the UI can update the status bar.
+    status = Signal(str)
 
     def __init__(
         self,
@@ -65,12 +70,30 @@ class RenderWorker(QThread):
         Must not touch Qt widgets directly — all UI updates go through signals.
         """
         try:
+            # -- Auto-tag: analyze sketch → generate Danbooru tags -------------
+            # Runs both Gemini stages before the ComfyUI workflow is submitted.
+            # The returned tag string replaces the raw user text as the prompt.
+            # Falls back to the raw user text if either Gemini call fails.
+            prompt = self._prompt or "masterpiece, best quality, highres, 2d, illustration, anime"
+            try:
+                self.status.emit("Analyzing sketch...")
+                description = analyze_image(str(self._sketch_path))
+
+                self.status.emit("Generating tags...")
+                # TODO: test without this delay — may not be needed for Gemini paid tier.
+                time.sleep(10)
+                prompt = generate_tags(description, self._prompt or None)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[render_worker] Auto-tagger failed, using raw prompt as fallback: {exc}")
+                # prompt stays as self._prompt (set above)
+
             # -- Step 1: submit to ComfyUI, wait for the output URL -----------
             # This call blocks for the duration of inference (typically 30–90 s).
             # Includes upload, queue, polling, and URL construction internally.
+            self.status.emit("Rendering… (this may take up to a minute on first render)")
             image_url = render_frame(
                 self._sketch_path,
-                self._prompt,
+                prompt,
                 ip_adapter_strength=self._ip_adapter_strength,
                 controlnet_strength=self._controlnet_strength,
                 reference_paths=self._reference_paths,
