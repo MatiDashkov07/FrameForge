@@ -25,11 +25,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QAction, QImage, QPixmap
+from PySide6.QtGui import QAction, QColor, QImage, QPainter, QPixmap
 
 from frameforge.ui.sketch_drop_zone import SketchDropZone
 from frameforge.ui.reference_drop_zone import ReferenceDropZone
 from frameforge.ui.render_worker import RenderWorker
+from frameforge.ui.bg_removal_worker import BgRemovalWorker
 
 # Canvas page indices — used with self._canvas_stack.setCurrentIndex()
 _PAGE_PLACEHOLDER = 0
@@ -66,7 +67,9 @@ class MainWindow(QMainWindow):
         self.sketch_path: Path | None = None        # set by _on_sketch_loaded
         self.reference_paths: list[str] = []        # set by _on_references_changed
         self._last_render: QImage | None = None     # set by _on_result_ready
+        self._clear_png: QImage | None = None        # set by _on_bg_result_ready
         self._render_worker: RenderWorker | None = None  # alive during render
+        self._bg_worker: BgRemovalWorker | None = None   # alive during bg removal
 
         self._build_menu_bar()
         self._build_central_widget()
@@ -164,6 +167,14 @@ class MainWindow(QMainWindow):
         self._render_btn.clicked.connect(self._on_render_clicked)
         layout.addWidget(self._render_btn)
 
+        # ── Generate Clear PNG button ──────────────────────────────────
+        # Enabled after a render result exists; resets on new render.
+        self._generate_clear_btn = QPushButton("Generate Clear PNG")
+        self._generate_clear_btn.setEnabled(False)
+        self._generate_clear_btn.setMinimumHeight(36)
+        self._generate_clear_btn.clicked.connect(self._on_generate_clear_png_clicked)
+        layout.addWidget(self._generate_clear_btn)
+
         # ── Export PNG button ──────────────────────────────────────────
         # Disabled until a render result exists (enabled in _on_result_ready).
         self._export_btn = QPushButton("Export PNG")
@@ -171,6 +182,14 @@ class MainWindow(QMainWindow):
         self._export_btn.setMinimumHeight(36)
         self._export_btn.clicked.connect(self._on_export_clicked)
         layout.addWidget(self._export_btn)
+
+        # ── Export Clear PNG button ────────────────────────────────────
+        # Disabled until background removal succeeds.
+        self._export_clear_btn = QPushButton("Export Clear PNG")
+        self._export_clear_btn.setEnabled(False)
+        self._export_clear_btn.setMinimumHeight(36)
+        self._export_clear_btn.clicked.connect(self._on_export_clear_png_clicked)
+        layout.addWidget(self._export_clear_btn)
 
         return sidebar
 
@@ -268,8 +287,14 @@ class MainWindow(QMainWindow):
         self._toggle_render_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
         self._toggle_render_btn.clicked.connect(self._show_render)
 
+        self._toggle_clear_btn = QPushButton("Clear PNG")
+        self._toggle_clear_btn.setEnabled(False)
+        self._toggle_clear_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+        self._toggle_clear_btn.clicked.connect(self._show_clear)
+
         bar_layout.addWidget(self._toggle_sketch_btn)
         bar_layout.addWidget(self._toggle_render_btn)
+        bar_layout.addWidget(self._toggle_clear_btn)
         bar_layout.addStretch()
         outer.addWidget(toggle_bar)
 
@@ -341,6 +366,15 @@ class MainWindow(QMainWindow):
         if self.sketch_path is None:
             return  # guard — button should be disabled, but be safe
 
+        # Stop any in-progress background removal and reset clear PNG state.
+        if self._bg_worker is not None:
+            self._bg_worker.quit()
+            self._bg_worker = None
+        self._clear_png = None
+        self._toggle_clear_btn.setEnabled(False)
+        self._generate_clear_btn.setEnabled(False)
+        self._export_clear_btn.setEnabled(False)
+
         # If the user was viewing references, switch back to the sketch canvas
         # so they can watch the loading state and result.
         self._activate_sketch_tab()
@@ -375,6 +409,7 @@ class MainWindow(QMainWindow):
         self._toggle_sketch_btn.setEnabled(True)
         self._toggle_render_btn.setEnabled(True)
         self._export_btn.setEnabled(True)
+        self._generate_clear_btn.setEnabled(True)
 
         # Default view after a render: show the AI result.
         self._show_render()
@@ -427,7 +462,7 @@ class MainWindow(QMainWindow):
             return
         pixmap = QPixmap(str(self.sketch_path))
         self._display_pixmap(pixmap)
-        self._set_toggle_active(sketch=True)
+        self._set_toggle_active("sketch")
 
     def _show_render(self) -> None:
         """Display the last render result in the result image label."""
@@ -435,7 +470,15 @@ class MainWindow(QMainWindow):
             return
         pixmap = QPixmap.fromImage(self._last_render)
         self._display_pixmap(pixmap)
-        self._set_toggle_active(sketch=False)
+        self._set_toggle_active("render")
+
+    def _show_clear(self) -> None:
+        """Display the background-removed image with a checkerboard backdrop."""
+        if self._clear_png is None:
+            return
+        composite = self._make_checkerboard_pixmap(self._clear_png)
+        self._result_img_label.setPixmap(composite)
+        self._set_toggle_active("clear")
 
     def _display_pixmap(self, pixmap: QPixmap) -> None:
         """Scale pixmap to fit the image label, preserving aspect ratio."""
@@ -446,14 +489,104 @@ class MainWindow(QMainWindow):
         )
         self._result_img_label.setPixmap(scaled)
 
-    def _set_toggle_active(self, *, sketch: bool) -> None:
-        """Apply active/inactive styles to the two toggle buttons."""
-        if sketch:
-            self._toggle_sketch_btn.setStyleSheet(_TOGGLE_ACTIVE_STYLE)
-            self._toggle_render_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
+    def _set_toggle_active(self, mode: str) -> None:
+        """Apply active/inactive styles to the three canvas toggle buttons.
+
+        *mode* must be one of ``"sketch"``, ``"render"``, or ``"clear"``.
+        """
+        self._toggle_sketch_btn.setStyleSheet(
+            _TOGGLE_ACTIVE_STYLE if mode == "sketch" else _TOGGLE_INACTIVE_STYLE
+        )
+        self._toggle_render_btn.setStyleSheet(
+            _TOGGLE_ACTIVE_STYLE if mode == "render" else _TOGGLE_INACTIVE_STYLE
+        )
+        self._toggle_clear_btn.setStyleSheet(
+            _TOGGLE_ACTIVE_STYLE if mode == "clear" else _TOGGLE_INACTIVE_STYLE
+        )
+
+    def _make_checkerboard_pixmap(self, rgba_image: QImage) -> QPixmap:
+        """Return a pixmap with a gray checkerboard background and *rgba_image*
+        composited on top at the current label size."""
+        display_size = self._result_img_label.size()
+        scaled_pixmap = QPixmap.fromImage(rgba_image).scaled(
+            display_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        w, h = scaled_pixmap.width(), scaled_pixmap.height()
+        checker = QPixmap(w, h)
+        painter = QPainter(checker)
+        tile = 10
+        light = QColor(200, 200, 200)
+        dark = QColor(150, 150, 150)
+        for row in range(h // tile + 1):
+            for col in range(w // tile + 1):
+                color = light if (row + col) % 2 == 0 else dark
+                painter.fillRect(col * tile, row * tile, tile, tile, color)
+        painter.drawPixmap(0, 0, scaled_pixmap)
+        painter.end()
+
+        return checker
+
+    # ------------------------------------------------------------------ #
+    # Background removal slots                                             #
+    # ------------------------------------------------------------------ #
+
+    def _on_generate_clear_png_clicked(self) -> None:
+        """User clicked Generate Clear PNG: run background removal in a worker."""
+        if self._last_render is None:
+            return
+
+        self._generate_clear_btn.setEnabled(False)
+        self.statusBar().showMessage("Removing background…")
+
+        self._bg_worker = BgRemovalWorker(self._last_render)
+        self._bg_worker.status.connect(self.statusBar().showMessage)
+        self._bg_worker.result_ready.connect(self._on_bg_result_ready)
+        self._bg_worker.error.connect(self._on_bg_error)
+        self._bg_worker.finished.connect(self._on_bg_worker_finished)
+        self._bg_worker.start()
+
+    def _on_bg_result_ready(self, image: QImage) -> None:
+        """BgRemovalWorker succeeded: store result, enable Clear PNG tab."""
+        self._clear_png = image
+        self._toggle_clear_btn.setEnabled(True)
+        self._export_clear_btn.setEnabled(True)
+        self._canvas_stack.setCurrentIndex(_PAGE_RESULT)
+        self._show_clear()
+        self.statusBar().showMessage("Background removed.")
+
+    def _on_bg_error(self, message: str) -> None:
+        """BgRemovalWorker failed: surface error and re-enable button."""
+        self.statusBar().showMessage(f"Background removal failed: {message}")
+        self._generate_clear_btn.setEnabled(True)
+
+    def _on_bg_worker_finished(self) -> None:
+        """QThread finished: clean up worker reference."""
+        self._bg_worker = None
+
+    def _on_export_clear_png_clicked(self) -> None:
+        """Save self._clear_png as a PNG with alpha channel."""
+        if self._clear_png is None:
+            return
+
+        from PySide6.QtWidgets import QFileDialog  # local import: only needed here
+
+        default_name = datetime.now().strftime("frameforge_%Y%m%d_%H%M%S_clear.png")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Clear PNG",
+            default_name,
+            "PNG Image (*.png)",
+        )
+        if not path:
+            return
+
+        if self._clear_png.save(path):
+            self.statusBar().showMessage(f"Exported: {Path(path).name}")
         else:
-            self._toggle_sketch_btn.setStyleSheet(_TOGGLE_INACTIVE_STYLE)
-            self._toggle_render_btn.setStyleSheet(_TOGGLE_ACTIVE_STYLE)
+            self.statusBar().showMessage("Export failed.")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
