@@ -71,8 +71,8 @@ class RenderWorker(QThread):
         try:
             # -- Auto-tag: analyze sketch → generate Danbooru tags -------------
             # Stage 1 + 2 run before the ComfyUI workflow is submitted.
-            # assemble_prompt() prepends the quality prefix and appends the
-            # user's scene direction — Gemini only produces the middle section.
+            # assemble_prompt() puts Gemini's tags first, then scene direction,
+            # then appends the quality suffix — Gemini only produces the middle section.
             # Falls back to quality prefix + scene direction if Gemini fails.
             try:
                 self.status.emit("Analyzing sketch...")
