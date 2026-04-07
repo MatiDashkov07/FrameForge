@@ -42,9 +42,18 @@ _WORKFLOW_PATH = Path(__file__).parent / "worflow_api_v1.json"
 _SKETCH_NODE           = "152"  # LoadImage              → inputs.image
 _REFERENCE_NODE        = "155"  # LoadImage              → inputs.image
 _POSITIVE_PROMPT_NODE  = "145"  # CLIPTextEncode         → inputs.text
+_NEGATIVE_PROMPT_NODE  = "146"  # CLIPTextEncode         → inputs.text
 _CONTROLNET_NODE       = "154"  # ControlNetApplyAdvanced → inputs.strength
 _IP_ADAPTER_NODE       = "159"  # IPAdapterAdvanced      → inputs.weight
 _SAVE_IMAGE_NODE       = "151"  # SaveImage              → read for output filename
+
+# Animagine XL 3.1 recommended negative prompt (from official model docs).
+_NEGATIVE_PROMPT = (
+    "nsfw, lowres, (bad), text, error, fewer, extra, missing, worst quality, "
+    "jpeg artifacts, low quality, watermark, unfinished, displeasing, oldest, "
+    "early, chromatic aberration, signature, extra digits, artistic error, "
+    "username, scan, [abstract]"
+)
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
@@ -243,6 +252,7 @@ def _build_workflow(
     wf[_SKETCH_NODE][         "inputs"]["image"]    = sketch_fn
     wf[_REFERENCE_NODE][      "inputs"]["image"]    = ref_fn
     wf[_POSITIVE_PROMPT_NODE]["inputs"]["text"]     = prompt
+    wf[_NEGATIVE_PROMPT_NODE]["inputs"]["text"]     = _NEGATIVE_PROMPT
     wf[_CONTROLNET_NODE][     "inputs"]["strength"] = cn_strength
     wf[_IP_ADAPTER_NODE][     "inputs"]["weight"]   = ip_strength
 

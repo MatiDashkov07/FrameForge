@@ -18,14 +18,13 @@ No pipeline logic lives here. This class only orchestrates the call and
 converts the raw bytes into a QImage that the UI can display directly.
 """
 
-import time
 import urllib.request
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from frameforge.pipeline.auto_tagger import analyze_image, generate_tags
+from frameforge.pipeline.auto_tagger import analyze_image, assemble_prompt, generate_tags
 from frameforge.pipeline.comfyui_client import render_frame, _USER_AGENT
 
 
@@ -71,21 +70,20 @@ class RenderWorker(QThread):
         """
         try:
             # -- Auto-tag: analyze sketch → generate Danbooru tags -------------
-            # Runs both Gemini stages before the ComfyUI workflow is submitted.
-            # The returned tag string replaces the raw user text as the prompt.
-            # Falls back to the raw user text if either Gemini call fails.
-            prompt = self._prompt or "masterpiece, best quality, highres, 2d, illustration, anime"
+            # Stage 1 + 2 run before the ComfyUI workflow is submitted.
+            # assemble_prompt() prepends the quality prefix and appends the
+            # user's scene direction — Gemini only produces the middle section.
+            # Falls back to quality prefix + scene direction if Gemini fails.
             try:
                 self.status.emit("Analyzing sketch...")
                 description = analyze_image(str(self._sketch_path))
 
                 self.status.emit("Generating tags...")
-                # TODO: test without this delay — may not be needed for Gemini paid tier.
-                time.sleep(10)
-                prompt = generate_tags(description, self._prompt or None)
+                gemini_tags = generate_tags(description)
+                prompt = assemble_prompt(gemini_tags, self._prompt or None)
             except Exception as exc:  # noqa: BLE001
-                print(f"[render_worker] Auto-tagger failed, using raw prompt as fallback: {exc}")
-                # prompt stays as self._prompt (set above)
+                print(f"[render_worker] Auto-tagger failed, using fallback prompt: {exc}")
+                prompt = assemble_prompt("", self._prompt or None)
 
             # -- Step 1: submit to ComfyUI, wait for the output URL -----------
             # This call blocks for the duration of inference (typically 30–90 s).
