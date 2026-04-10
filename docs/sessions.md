@@ -34,3 +34,11 @@ Integrated the auto-tagger (Gemini 2.5 Flash vision → Danbooru tag synthesis) 
 
 Session Summary
 Rewrote the Gemini-based auto-tagger to produce Danbooru-compliant tags in the exact order required by Animagine XL 3.1 (character identity first, quality tags last). Fixed a critical bug where Gemini 2.5 Flash's thinking mode consumed all output tokens, returning empty tags. Disabled thinking for both pipeline stages, which also improved latency. Updated the negative prompt to match Animagine's recommended settings. Discovered that thin pencil-style lineart works best with ControlNet, and that recognized characters render well with low IP-Adapter strength (0.5) since the Danbooru tags carry the visual identity.
+
+
+Session Summary
+Ran controlled experiments proving that IP-Adapter creates an unavoidable tradeoff between character color fidelity and background control. Resolved this by implementing local background removal (rembg) as a post-processing step, producing transparent PNG assets. This breakthrough led to a fundamental architectural shift: FrameForge now follows a compositing pipeline (render character → remove background → deliver clean asset) instead of trying to produce final frames in a single pass. Wrote a comprehensive pipeline reevaluation document that replaces the Phase 2 plan and serves as the new source of truth for all architecture decisions.
+
+
+Session Summary
+Ran empirical experiments to resolve IP-Adapter background contamination (Step A from Pipeline Reevaluation). Key findings: the blue background bleed is Animagine's training bias, not reference image contamination — it appears even with a pure white reference. Adding white_background to the prompt helps partially but doesn't eliminate it. Replaced rembg (U²-Net) with RMBG-2.0 (BRIA AI, BiRefNet architecture) for local background removal — dramatically better anime hair edge quality. RMBG-2.0 runs on CPU in ~35s, acceptable for on-demand use. One edge case identified: RMBG-2.0 occasionally clips white areas inside eyes on renders with dark backgrounds. Step A is now complete; background removal quality is production-viable.

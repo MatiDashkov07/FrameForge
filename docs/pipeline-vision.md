@@ -113,3 +113,9 @@ Review and edit suggested visual traits in plain language
 Select a character and location from dropdowns
 Optionally write a short scene direction for the current frame
 Click Render.
+
+
+
+auto prompter upgrades:
+users prompts overrides any of the auto taggers tag's, for exmaple staring at camera and blinking. 
+
